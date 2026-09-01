@@ -1,6 +1,8 @@
+import re
+
 import pandas as pd
 
-from src.config.config import RAW_DATA_DIR
+from src.config.config import RAW_DATA_DIR, PROCESSED_DATA_DIR
 
 
 # ==========================================================
@@ -14,29 +16,31 @@ def load_products():
 
     file_path = RAW_DATA_DIR / "product_catalog.json"
 
-    catalog_df = pd.read_json(file_path)
+    import json
 
-    return catalog_df
+    with open(file_path, "r", encoding="utf-8") as file:
+        data = json.load(file)
+
+    products = data.get("products", [])
+
+    return pd.DataFrame(products)
 
 
 # ==========================================================
 # FLATTEN PRODUCT DATA
 # ==========================================================
 
-def flatten_products(catalog_df):
+def flatten_products(df):
     """
-    Extract product records and flatten nested fields.
+    Flatten nested product specifications and price fields.
     """
-
-    products = catalog_df["products"].tolist()
 
     flattened_products = []
 
-    for product in products:
+    for product in df.to_dict("records"):
 
         specs = product.get("specs") or {}
         price = product.get("price") or {}
-
         dimensions = specs.get("dimensions_cm") or {}
 
         flattened_products.append(
@@ -54,7 +58,6 @@ def flatten_products(catalog_df):
 
                 "stock_qty": product.get("stock_qty"),
                 "avg_rating": product.get("avg_rating"),
-
                 "tags": product.get("tags"),
 
                 "launch_date": product.get("launch_date"),
@@ -83,6 +86,73 @@ def flatten_products(catalog_df):
         )
 
     return pd.DataFrame(flattened_products)
+
+
+# ==========================================================
+# CLEAN WEIGHT
+# ==========================================================
+
+def clean_weight(value):
+    """
+    Convert product weight to kilograms.
+    """
+
+    if pd.isna(value):
+        return None
+
+    value = str(value).strip().lower()
+
+    if value in {"", "-", "nan", "none"}:
+        return None
+
+    # Remove kg text and other non-numeric characters
+    value = re.sub(r"[^0-9.\-]", "", value)
+
+    try:
+        numeric_value = float(value)
+    except ValueError:
+        return None
+
+    # Weight cannot be negative or zero
+    if numeric_value <= 0:
+        return None
+
+    return numeric_value
+
+
+# ==========================================================
+# CLEAN PRICE
+# ==========================================================
+
+def clean_price(value):
+    """
+    Convert price values to numeric INR.
+    """
+
+    if pd.isna(value):
+        return None
+
+    value = str(value).strip()
+
+    if value in {"", "-", "nan", "none"}:
+        return None
+
+    value = (
+        value
+        .replace(",", "")
+        .replace("₹", "")
+        .strip()
+    )
+
+    try:
+        numeric_value = float(value)
+    except ValueError:
+        return None
+
+    if numeric_value <= 0:
+        return None
+
+    return numeric_value
 
 
 # ==========================================================
@@ -152,7 +222,17 @@ def clean_products(df):
         )
 
     # ------------------------------------------------------
-    # Clean price currency
+    # Standardize category
+    # ------------------------------------------------------
+
+    df["category"] = (
+        df["category"]
+        .str.lower()
+        .str.title()
+    )
+
+    # ------------------------------------------------------
+    # Clean currency
     # ------------------------------------------------------
 
     df["price_currency"] = (
@@ -163,13 +243,12 @@ def clean_products(df):
     )
 
     # ------------------------------------------------------
-    # Clean price amount
+    # Clean price
     # ------------------------------------------------------
 
     df["price_amount"] = (
         df["price_amount"]
-        .astype("string")
-        .str.replace(",", "", regex=False)
+        .apply(clean_price)
     )
 
     df["price_amount"] = pd.to_numeric(
@@ -178,8 +257,13 @@ def clean_products(df):
     )
 
     # ------------------------------------------------------
-    # Convert weight
+    # Clean weight
     # ------------------------------------------------------
+
+    df["weight_kg"] = (
+        df["weight_kg"]
+        .apply(clean_weight)
+    )
 
     df["weight_kg"] = pd.to_numeric(
         df["weight_kg"],
@@ -187,7 +271,7 @@ def clean_products(df):
     )
 
     # ------------------------------------------------------
-    # Convert dimensions
+    # Clean dimensions
     # ------------------------------------------------------
 
     dimension_columns = [
@@ -203,6 +287,62 @@ def clean_products(df):
             errors="coerce"
         )
 
+        # Dimensions cannot be zero or negative
+        df.loc[
+            df[column] <= 0,
+            column
+        ] = None
+
+    # ------------------------------------------------------
+    # Clean stock quantity
+    # ------------------------------------------------------
+
+    df["stock_qty"] = pd.to_numeric(
+        df["stock_qty"],
+        errors="coerce"
+    )
+
+    # Negative stock is invalid
+    negative_stock = (
+        df["stock_qty"] < 0
+    ).sum()
+
+    print(
+        f"Invalid negative stock values: "
+        f"{negative_stock}"
+    )
+
+    df.loc[
+        df["stock_qty"] < 0,
+        "stock_qty"
+    ] = None
+
+    # ------------------------------------------------------
+    # Clean ratings
+    # ------------------------------------------------------
+
+    df["avg_rating"] = pd.to_numeric(
+        df["avg_rating"],
+        errors="coerce"
+    )
+
+    # Ratings must be between 0 and 5
+    invalid_ratings = (
+        (df["avg_rating"] < 0)
+        | (df["avg_rating"] > 5)
+    ).sum()
+
+    print(
+        f"Invalid rating values: "
+        f"{invalid_ratings}"
+    )
+
+    df.loc[
+        (df["avg_rating"] < 0)
+        | (df["avg_rating"] > 5),
+        "avg_rating"
+    ] = None
+
     # ------------------------------------------------------
     # Standardize boolean columns
     # ------------------------------------------------------
@@ -216,25 +356,10 @@ def clean_products(df):
 
     for column in boolean_columns:
 
-        df[column] = df[column].astype("boolean")
-
-    # ------------------------------------------------------
-    # Convert stock quantity
-    # ------------------------------------------------------
-
-    df["stock_qty"] = pd.to_numeric(
-        df["stock_qty"],
-        errors="coerce"
-    )
-
-    # ------------------------------------------------------
-    # Convert average rating
-    # ------------------------------------------------------
-
-    df["avg_rating"] = pd.to_numeric(
-        df["avg_rating"],
-        errors="coerce"
-    )
+        df[column] = (
+            df[column]
+            .astype("boolean")
+        )
 
     # ------------------------------------------------------
     # Standardize launch date
@@ -276,18 +401,65 @@ def clean_products(df):
 
 if __name__ == "__main__":
 
+    # Load raw catalog
     catalog_df = load_products()
 
-    products_df = flatten_products(catalog_df)
+    print(
+        "Raw products loaded:",
+        len(catalog_df)
+    )
 
-    products_df = clean_products(products_df)
+    # Flatten nested JSON
+    products_df = flatten_products(
+        catalog_df
+    )
 
-    print("\nProducts dataset cleaned successfully.")
+    # Clean products
+    products_df = clean_products(
+        products_df
+    )
 
-    print("Shape:", products_df.shape)
+    print(
+        "\nProducts dataset cleaned successfully."
+    )
+
+    print(
+        "Shape:",
+        products_df.shape
+    )
 
     print("\nData types:")
     print(products_df.dtypes)
 
+    print("\nCategories:")
+    print(
+        products_df["category"]
+        .value_counts()
+    )
+
     print("\nFirst 5 records:")
-    print(products_df.head())
+    print(
+        products_df.head().to_string(
+            index=False
+        )
+    )
+
+    # ------------------------------------------------------
+    # SAVE PROCESSED DATASET
+    # ------------------------------------------------------
+
+    output_path = (
+        PROCESSED_DATA_DIR
+        / "products_cleaned.csv"
+    )
+
+    products_df.to_csv(
+        output_path,
+        index=False
+    )
+
+    print(
+        "\nCleaned products dataset saved to:"
+    )
+
+    print(output_path)
