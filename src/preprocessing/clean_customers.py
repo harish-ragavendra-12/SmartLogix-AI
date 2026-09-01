@@ -1,7 +1,14 @@
 import pandas as pd
 
-from src.config.config import RAW_DATA_DIR
+from src.config.config import (
+    RAW_DATA_DIR,
+    PROCESSED_DATA_DIR
+)
 
+
+# ==========================================================
+# LOAD CUSTOMERS
+# ==========================================================
 
 def load_customers():
     """
@@ -14,6 +21,57 @@ def load_customers():
 
     return df
 
+
+# ==========================================================
+# CLEAN SIGNUP DATE
+# ==========================================================
+
+def clean_signup_date(value):
+    """
+    Convert multiple signup date formats into a common
+    datetime format.
+    """
+
+    if pd.isna(value):
+        return pd.NaT
+
+    value = str(value).strip()
+
+    if value.lower() in {"", "-", "nan", "none", "unknown"}:
+        return pd.NaT
+
+    formats = [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+
+        "%d/%m/%Y %H:%M",
+        "%d/%m/%Y",
+
+        "%d-%m-%Y %H:%M",
+        "%d-%m-%Y",
+    ]
+
+    for date_format in formats:
+
+        try:
+            parsed_date = pd.to_datetime(
+                value,
+                format=date_format,
+                errors="coerce"
+            )
+
+            if not pd.isna(parsed_date):
+                return parsed_date
+
+        except (ValueError, TypeError):
+            continue
+
+    return pd.NaT
+
+
+# ==========================================================
+# CLEAN CUSTOMERS
+# ==========================================================
 
 def clean_customers(df):
     """
@@ -33,11 +91,20 @@ def clean_customers(df):
     )
 
     # ------------------------------------------------------
-    # Remove duplicate customers
+    # Remove exact duplicate customer records
     # ------------------------------------------------------
+
+    before_duplicates = len(df)
 
     df = df.drop_duplicates(
         subset="customer_id"
+    )
+
+    after_duplicates = len(df)
+
+    print(
+        f"\nDuplicate customer records removed: "
+        f"{before_duplicates - after_duplicates}"
     )
 
     # ------------------------------------------------------
@@ -57,11 +124,11 @@ def clean_customers(df):
     text_columns = [
         "customer_name",
         "city",
-        "state",
-        "customer_segment"
+        "state"
     ]
 
     for column in text_columns:
+
         df[column] = (
             df[column]
             .astype("string")
@@ -103,9 +170,9 @@ def clean_customers(df):
     # Standardize signup date
     # ------------------------------------------------------
 
-    df["signup_date"] = pd.to_datetime(
-        df["signup_date"],
-        errors="coerce"
+    df["signup_date"] = (
+        df["signup_date"]
+        .apply(clean_signup_date)
     )
 
     # ------------------------------------------------------
@@ -114,8 +181,9 @@ def clean_customers(df):
 
     df["customer_segment"] = (
         df["customer_segment"]
+        .astype("string")
         .str.strip()
-        .str.lower()
+        .str.upper()
     )
 
     # ------------------------------------------------------
@@ -127,6 +195,7 @@ def clean_customers(df):
         "y": True,
         "true": True,
         "1": True,
+
         "no": False,
         "n": False,
         "false": False,
@@ -160,7 +229,7 @@ def clean_customers(df):
     )
 
     # ------------------------------------------------------
-    # Check Missing Values
+    # Check missing values
     # ------------------------------------------------------
 
     print("\nMissing values:")
@@ -183,11 +252,61 @@ if __name__ == "__main__":
 
     customers_df = load_customers()
 
-    customers_df = clean_customers(customers_df)
+    customers_df = clean_customers(
+        customers_df
+    )
 
-    print("Customers dataset cleaned successfully.")
-    print("Shape:", customers_df.shape)
+    # ------------------------------------------------------
+    # Save cleaned dataset
+    # ------------------------------------------------------
+
+    PROCESSED_DATA_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    output_path = (
+        PROCESSED_DATA_DIR /
+        "customers_cleaned.csv"
+    )
+
+    customers_df.to_csv(
+        output_path,
+        index=False
+    )
+
+    # ------------------------------------------------------
+    # Validation output
+    # ------------------------------------------------------
+
+    print(
+        "\nCustomers dataset cleaned successfully."
+    )
+
+    print(
+        "Shape:",
+        customers_df.shape
+    )
+
+    print(
+        "Cleaned dataset saved to:",
+        output_path
+    )
+
     print("\nData types:")
     print(customers_df.dtypes)
+
+    print("\nCustomer segments:")
+    print(
+        customers_df["customer_segment"]
+        .value_counts(dropna=False)
+    )
+
+    print("\nPrime membership:")
+    print(
+        customers_df["is_prime_member"]
+        .value_counts(dropna=False)
+    )
+
     print("\nFirst 5 records:")
     print(customers_df.head())

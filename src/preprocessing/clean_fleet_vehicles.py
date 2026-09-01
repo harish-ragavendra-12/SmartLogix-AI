@@ -1,6 +1,9 @@
 import pandas as pd
 
-from src.config.config import RAW_DATA_DIR
+from src.config.config import (
+    RAW_DATA_DIR,
+    PROCESSED_DATA_DIR
+)
 
 
 # ==========================================================
@@ -33,16 +36,19 @@ def clean_date(value):
 
     value = str(value).strip()
 
-    if value in {"", "-", "nan", "none"}:
+    if value.lower() in {"", "-", "nan", "none", "unknown"}:
         return pd.NaT
 
     formats = [
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%d",
+
         "%d-%m-%Y %H:%M:%S",
         "%d-%m-%Y",
+
         "%d/%m/%Y %H:%M:%S",
         "%d/%m/%Y",
+
         "%m/%d/%Y %H:%M:%S",
         "%m/%d/%Y",
     ]
@@ -63,6 +69,47 @@ def clean_date(value):
             continue
 
     return pd.NaT
+
+
+# ==========================================================
+# CLEAN CAPACITY
+# ==========================================================
+
+def clean_capacity(value):
+    """
+    Convert vehicle capacity values to kilograms.
+
+    Examples:
+        5.5       -> 5.5 kg
+        '4300 g'  -> 4.3 kg
+    """
+
+    if pd.isna(value):
+        return None
+
+    value = str(value).strip().lower()
+
+    if value in {"", "-", "nan", "none", "unknown"}:
+        return None
+
+    try:
+
+        if value.endswith("kg"):
+            return float(
+                value.replace("kg", "").strip()
+            )
+
+        if value.endswith("g"):
+            grams = float(
+                value.replace("g", "").strip()
+            )
+
+            return grams / 1000
+
+        return float(value)
+
+    except (ValueError, TypeError):
+        return None
 
 
 # ==========================================================
@@ -143,6 +190,7 @@ def clean_fleet_vehicles(df):
 
     df["vehicle_type"] = (
         df["vehicle_type"]
+        .str.lower()
         .str.strip()
         .str.title()
     )
@@ -159,7 +207,6 @@ def clean_fleet_vehicles(df):
         .str.replace("_", " ", regex=False)
     )
 
-    # Standardize known status values
     status_mapping = {
         "in service": "In Service",
         "under maintenance": "Maintenance",
@@ -192,11 +239,24 @@ def clean_fleet_vehicles(df):
     )
 
     # ------------------------------------------------------
-    # Convert numeric columns
+    # Clean vehicle capacity
+    # ------------------------------------------------------
+
+    df["capacity_kg"] = (
+        df["capacity_kg"]
+        .apply(clean_capacity)
+    )
+
+    df["capacity_kg"] = pd.to_numeric(
+        df["capacity_kg"],
+        errors="coerce"
+    )
+
+    # ------------------------------------------------------
+    # Convert remaining numeric columns
     # ------------------------------------------------------
 
     numeric_columns = [
-        "capacity_kg",
         "max_range_km",
         "avg_speed_kmph",
         "odometer_km",
@@ -209,6 +269,22 @@ def clean_fleet_vehicles(df):
             df[column],
             errors="coerce"
         )
+
+    # ------------------------------------------------------
+    # Remove physically invalid negative range values
+    # ------------------------------------------------------
+
+    invalid_range = df["max_range_km"] < 0
+
+    print(
+        "\nInvalid negative max_range_km values:",
+        invalid_range.sum()
+    )
+
+    df.loc[
+        invalid_range,
+        "max_range_km"
+    ] = pd.NA
 
     # ------------------------------------------------------
     # Convert date columns
@@ -255,6 +331,29 @@ if __name__ == "__main__":
         fleet_df
     )
 
+    # ------------------------------------------------------
+    # Save cleaned dataset
+    # ------------------------------------------------------
+
+    PROCESSED_DATA_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    output_path = (
+        PROCESSED_DATA_DIR /
+        "fleet_vehicles_cleaned.csv"
+    )
+
+    fleet_df.to_csv(
+        output_path,
+        index=False
+    )
+
+    # ------------------------------------------------------
+    # Validation output
+    # ------------------------------------------------------
+
     print(
         "\nFleet vehicles dataset cleaned successfully."
     )
@@ -264,8 +363,31 @@ if __name__ == "__main__":
         fleet_df.shape
     )
 
+    print(
+        "Cleaned dataset saved to:",
+        output_path
+    )
+
     print("\nData types:")
     print(fleet_df.dtypes)
+
+    print("\nVehicle types:")
+    print(
+        fleet_df["vehicle_type"]
+        .value_counts(dropna=False)
+    )
+
+    print("\nFleet status:")
+    print(
+        fleet_df["fleet_status"]
+        .value_counts(dropna=False)
+    )
+
+    print("\nOwnership:")
+    print(
+        fleet_df["ownership"]
+        .value_counts(dropna=False)
+    )
 
     print("\nFirst 5 records:")
     print(fleet_df.head())

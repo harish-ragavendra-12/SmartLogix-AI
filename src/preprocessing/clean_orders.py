@@ -2,7 +2,7 @@ import re
 
 import pandas as pd
 
-from src.config.config import RAW_DATA_DIR
+from src.config.config import RAW_DATA_DIR, PROCESSED_DATA_DIR
 
 
 # ==========================================================
@@ -35,7 +35,7 @@ def clean_package_weight(value):
 
     value = str(value).strip().lower()
 
-    if value in {"", "-", "nan", "none"}:
+    if value in {"", "-", "nan", "none", "unknown"}:
         return None
 
     try:
@@ -68,7 +68,7 @@ def clean_distance(value):
 
     value = str(value).strip().lower()
 
-    if value in {"", "-", "nan", "none"}:
+    if value in {"", "-", "nan", "none", "unknown"}:
         return None
 
     value = value.replace("km", "").strip()
@@ -263,6 +263,20 @@ def clean_orders(df):
         )
 
     # ------------------------------------------------------
+    # Validate coordinates
+    # ------------------------------------------------------
+
+    df.loc[
+        ~df["destination_lat"].between(-90, 90),
+        "destination_lat"
+    ] = pd.NA
+
+    df.loc[
+        ~df["destination_lon"].between(-180, 180),
+        "destination_lon"
+    ] = pd.NA
+
+    # ------------------------------------------------------
     # Convert distance
     # ------------------------------------------------------
 
@@ -284,6 +298,12 @@ def clean_orders(df):
         df["package_weight"],
         errors="coerce"
     )
+
+    # Remove invalid negative package weights
+    df.loc[
+        df["package_weight"] <= 0,
+        "package_weight"
+    ] = pd.NA
 
     # ------------------------------------------------------
     # Parse package dimensions
@@ -333,6 +353,12 @@ def clean_orders(df):
         df["delivery_cost_inr"]
         .apply(clean_currency)
     )
+
+    # Remove invalid negative delivery costs
+    df.loc[
+        df["delivery_cost_inr"] < 0,
+        "delivery_cost_inr"
+    ] = pd.NA
 
     # ------------------------------------------------------
     # Convert delivery hours
@@ -514,9 +540,16 @@ if __name__ == "__main__":
 
     orders_df = clean_orders(orders_df)
 
-    print("\nOrders dataset cleaned successfully.")
+    output_path = PROCESSED_DATA_DIR / "orders_cleaned.csv"
 
+    orders_df.to_csv(
+        output_path,
+        index=False
+    )
+
+    print("\nOrders dataset cleaned successfully.")
     print("Shape:", orders_df.shape)
+    print("Cleaned dataset saved to:", output_path)
 
     print("\nData types:")
     print(orders_df.dtypes)

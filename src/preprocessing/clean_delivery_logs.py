@@ -1,6 +1,6 @@
 import pandas as pd
 
-from src.config.config import RAW_DATA_DIR
+from src.config.config import RAW_DATA_DIR, PROCESSED_DATA_DIR
 
 
 # ==========================================================
@@ -34,7 +34,7 @@ def clean_event_timestamp(value):
 
     value = str(value).strip()
 
-    if value in {"", "-", "nan", "none"}:
+    if value.lower() in {"", "-", "nan", "none"}:
         return pd.NaT
 
     # ------------------------------------------------------
@@ -42,34 +42,46 @@ def clean_event_timestamp(value):
     # ------------------------------------------------------
 
     if value.isdigit():
+
         try:
             return pd.to_datetime(
                 int(value),
                 unit="s",
                 errors="coerce"
             )
+
         except (ValueError, TypeError):
             return pd.NaT
 
     # ------------------------------------------------------
-    # ISO / standard datetime formats
+    # Different date formats found in the dataset
     # ------------------------------------------------------
 
     formats = [
         "%Y-%m-%dT%H:%M:%SZ",
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+
         "%d-%m-%Y %H:%M:%S",
         "%d-%m-%Y %H:%M",
+        "%d-%m-%Y",
+
         "%d/%m/%Y %H:%M:%S",
         "%d/%m/%Y %H:%M",
+
         "%m/%d/%Y %H:%M:%S",
         "%m/%d/%Y %H:%M",
+
+        "%b %d %Y %I:%M %p",
+        "%B %d %Y %I:%M %p",
     ]
 
     for date_format in formats:
 
         try:
+
             parsed_date = pd.to_datetime(
                 value,
                 format=date_format,
@@ -78,12 +90,38 @@ def clean_event_timestamp(value):
             )
 
             if not pd.isna(parsed_date):
+
                 return parsed_date.tz_localize(None)
 
         except (ValueError, TypeError):
+
             continue
 
     return pd.NaT
+
+
+# ==========================================================
+# CLEAN EVENT TYPE
+# ==========================================================
+
+def clean_event_type(value):
+    """
+    Standardize event type values.
+
+    Example:
+        Order Placed -> ORDER_PLACED
+        Picked Up    -> PICKED_UP
+    """
+
+    if pd.isna(value):
+        return pd.NA
+
+    value = str(value).strip().upper()
+
+    # Replace spaces with underscores
+    value = value.replace(" ", "_")
+
+    return value
 
 
 # ==========================================================
@@ -161,11 +199,20 @@ def clean_delivery_logs(df):
     )
 
     # ------------------------------------------------------
+    # Clean event type
+    # ------------------------------------------------------
+
+    df["event_type"] = (
+        df["event_type"]
+        .apply(clean_event_type)
+        .astype("string")
+    )
+
+    # ------------------------------------------------------
     # Clean categorical fields
     # ------------------------------------------------------
 
     categorical_columns = [
-        "event_type",
         "location_city",
         "exception_code"
     ]
@@ -227,6 +274,25 @@ if __name__ == "__main__":
         delivery_logs_df
     )
 
+    # ------------------------------------------------------
+    # Save cleaned dataset
+    # ------------------------------------------------------
+
+    PROCESSED_DATA_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    output_path = (
+        PROCESSED_DATA_DIR /
+        "delivery_logs_cleaned.csv"
+    )
+
+    delivery_logs_df.to_csv(
+        output_path,
+        index=False
+    )
+
     print(
         "\nDelivery logs dataset cleaned successfully."
     )
@@ -236,8 +302,19 @@ if __name__ == "__main__":
         delivery_logs_df.shape
     )
 
+    print(
+        "Cleaned dataset saved to:",
+        output_path
+    )
+
     print("\nData types:")
     print(delivery_logs_df.dtypes)
 
     print("\nFirst 5 records:")
     print(delivery_logs_df.head())
+
+    print("\nEvent types after cleaning:")
+    print(
+        delivery_logs_df["event_type"]
+        .value_counts(dropna=False)
+    )
