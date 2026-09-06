@@ -95,6 +95,7 @@ def flatten_products(df):
 def clean_weight(value):
     """
     Convert product weight to kilograms.
+    Remove invalid and obviously corrupted values.
     """
 
     if pd.isna(value):
@@ -105,7 +106,7 @@ def clean_weight(value):
     if value in {"", "-", "nan", "none"}:
         return None
 
-    # Remove kg text and other non-numeric characters
+    # Remove units and other non-numeric characters
     value = re.sub(r"[^0-9.\-]", "", value)
 
     try:
@@ -113,12 +114,16 @@ def clean_weight(value):
     except ValueError:
         return None
 
-    # Weight cannot be negative or zero
+    # Weight cannot be zero or negative
     if numeric_value <= 0:
         return None
 
-    return numeric_value
+    # Remove obviously corrupted/extreme weight values
+    # 1000 kg is used as a practical upper limit for this catalog
+    if numeric_value > 1000:
+        return None
 
+    return numeric_value
 
 # ==========================================================
 # CLEAN PRICE
@@ -260,13 +265,22 @@ def clean_products(df):
     # Clean weight
     # ------------------------------------------------------
 
-    df["weight_kg"] = (
-        df["weight_kg"]
-        .apply(clean_weight)
+    # Count invalid weight values before cleaning
+    original_weight = df["weight_kg"].copy()
+
+    cleaned_weight = original_weight.apply(clean_weight)
+
+    invalid_weights = (
+            original_weight.notna()
+            & cleaned_weight.isna()
+    ).sum()
+
+    print(
+        f"Invalid weight values: {invalid_weights}"
     )
 
     df["weight_kg"] = pd.to_numeric(
-        df["weight_kg"],
+        cleaned_weight,
         errors="coerce"
     )
 
