@@ -1,77 +1,238 @@
-import pandas as pd
+import re
 from pathlib import Path
 
+import pandas as pd
+
+
+# ==========================================================
+# PATHS
+# ==========================================================
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
-input_path = BASE_DIR / "data" / "raw" / "drone_telemetry.csv"
-output_path = BASE_DIR / "data" / "processed" / "drone_telemetry_cleaned.csv"
+input_path = (
+    BASE_DIR
+    / "data"
+    / "raw"
+    / "drone_telemetry.csv"
+)
+
+output_path = (
+    BASE_DIR
+    / "data"
+    / "processed"
+    / "drone_telemetry_cleaned.csv"
+)
+
+
+# ==========================================================
+# LOAD DATA
+# ==========================================================
 
 df = pd.read_csv(input_path)
 
+print("Raw dataset shape:", df.shape)
 
-# 1. Remove duplicate rows
+
+# ==========================================================
+# STANDARDIZE COLUMN NAMES
+# ==========================================================
+
+df.columns = (
+    df.columns
+    .str.strip()
+    .str.lower()
+)
+
+
+# ==========================================================
+# REMOVE DUPLICATE ROWS
+# ==========================================================
+
 before = len(df)
+
 df = df.drop_duplicates()
+
 after = len(df)
 
-print("Duplicate rows removed:", before - after)
-
-
-# 2. Clean flight timestamp
-
-# Replace invalid placeholder values with missing values
-df["flight_timestamp"] = df["flight_timestamp"].replace(
-    ["unknown", "-", ""], pd.NA
-)
-
-# Convert timestamp column to string
-timestamp = df["flight_timestamp"].astype("string").str.strip()
-
-# Create empty datetime column
-clean_timestamp = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
-
-
-# A. Unix timestamps (10-digit numbers)
-unix_mask = timestamp.str.fullmatch(r"\d{10}", na=False)
-
-clean_timestamp.loc[unix_mask] = pd.to_datetime(
-    timestamp.loc[unix_mask].astype("int64"),
-    unit="s",
-    errors="coerce"
+print(
+    "\nDuplicate rows removed:",
+    before - after
 )
 
 
-# B. Normal date/time formats
-normal_mask = ~unix_mask & timestamp.notna()
+# ==========================================================
+# CLEAN FLIGHT TIMESTAMP
+# ==========================================================
 
-clean_timestamp.loc[normal_mask] = pd.to_datetime(
+df["flight_timestamp"] = (
+    df["flight_timestamp"]
+    .astype("string")
+    .str.strip()
+)
+
+# Invalid placeholders
+df["flight_timestamp"] = (
+    df["flight_timestamp"]
+    .replace(
+        {
+            "": pd.NA,
+            "-": pd.NA,
+            "unknown": pd.NA,
+            "Unknown": pd.NA,
+            "UNKNOWN": pd.NA,
+            "nan": pd.NA,
+            "None": pd.NA,
+        }
+    )
+)
+
+timestamp = df["flight_timestamp"]
+
+clean_timestamp = pd.Series(
+    pd.NaT,
+    index=df.index,
+    dtype="datetime64[ns]"
+)
+
+
+# ----------------------------------------------------------
+# Unix timestamps
+# ----------------------------------------------------------
+
+unix_mask = timestamp.str.fullmatch(
+    r"\d{10}",
+    na=False
+)
+
+clean_timestamp.loc[unix_mask] = (
+    pd.to_datetime(
+        timestamp.loc[unix_mask]
+        .astype("int64"),
+        unit="s",
+        errors="coerce"
+    )
+)
+
+
+# ----------------------------------------------------------
+# Normal date/time values
+# ----------------------------------------------------------
+
+normal_mask = (
+    ~unix_mask
+    & timestamp.notna()
+)
+
+parsed_normal = pd.to_datetime(
     timestamp.loc[normal_mask],
     errors="coerce",
-    dayfirst=True,
     format="mixed",
+    dayfirst=True,
     utc=True
-).dt.tz_localize(None)
+)
+
+clean_timestamp.loc[normal_mask] = (
+    parsed_normal
+    .dt.tz_localize(None)
+)
 
 
-# Replace original column
 df["flight_timestamp"] = clean_timestamp
 
 
-# 3. Fill missing flight duration with median
-median_duration = df["flight_duration_min"].median()
+# ==========================================================
+# CLEAN NUMERIC COLUMNS
+# ==========================================================
 
-df["flight_duration_min"] = df["flight_duration_min"].fillna(
-    median_duration
-)
+numeric_columns = [
+    "flight_duration_min",
+    "payload_kg",
+    "battery_end_pct",
+    "motor_temp_c",
+    "vibration_rms",
+    "rotor_rpm_avg"
+]
+
+for column in numeric_columns:
+
+    df[column] = pd.to_numeric(
+        df[column],
+        errors="coerce"
+    )
 
 
-# 4. Clean payload values containing "kg"
+# ==========================================================
+# CLEAN PAYLOAD
+# ==========================================================
+
+# Handle values such as:
+# 25 kg
+# 25kg
+# 25000 g
+# 1,250 kg
+
+def clean_payload(value):
+
+    if pd.isna(value):
+        return None
+
+    value = str(value).strip().lower()
+
+    if value in {
+        "",
+        "-",
+        "unknown",
+        "none",
+        "nan"
+    }:
+        return None
+
+    value = value.replace(",", "")
+
+    try:
+
+        if "kg" in value:
+
+            numeric_value = float(
+                re.sub(
+                    r"[^0-9.\-]",
+                    "",
+                    value
+                )
+            )
+
+            return (
+                numeric_value
+                if numeric_value > 0
+                else None
+            )
+
+        if "g" in value:
+
+            numeric_value = float(
+                re.sub(
+                    r"[^0-9.\-]",
+                    "",
+                    value
+                )
+            )
+
+            return (
+                numeric_value / 1000
+                if numeric_value > 0
+                else None
+            )
+
+        return float(value)
+
+    except ValueError:
+        return None
+
 
 df["payload_kg"] = (
     df["payload_kg"]
-    .astype(str)
-    .str.replace("kg", "", regex=False)
+    .apply(clean_payload)
 )
 
 df["payload_kg"] = pd.to_numeric(
@@ -80,47 +241,237 @@ df["payload_kg"] = pd.to_numeric(
 )
 
 
-# 5. Convert other numeric columns
+# ==========================================================
+# VALIDATE TELEMETRY VALUES
+# ==========================================================
 
-numeric_columns = [
-    "battery_end_pct",
-    "motor_temp_c",
-    "vibration_rms",
+# Battery percentage must be 0–100
+
+invalid_battery = (
+    (df["battery_end_pct"] < 0)
+    | (df["battery_end_pct"] > 100)
+).sum()
+
+print(
+    "Invalid battery percentage values:",
+    invalid_battery
+)
+
+df.loc[
+    (df["battery_end_pct"] < 0)
+    | (df["battery_end_pct"] > 100),
+    "battery_end_pct"
+] = None
+
+
+# ----------------------------------------------------------
+# Flight duration
+# ----------------------------------------------------------
+
+invalid_duration = (
+    df["flight_duration_min"] <= 0
+).sum()
+
+print(
+    "Invalid flight duration values:",
+    invalid_duration
+)
+
+df.loc[
+    df["flight_duration_min"] <= 0,
+    "flight_duration_min"
+] = None
+
+
+# Fill missing duration with median
+
+median_duration = (
+    df["flight_duration_min"]
+    .median()
+)
+
+df["flight_duration_min"] = (
+    df["flight_duration_min"]
+    .fillna(median_duration)
+)
+
+
+# ----------------------------------------------------------
+# Payload
+# ----------------------------------------------------------
+
+invalid_payload = (
+    df["payload_kg"] < 0
+).sum()
+
+print(
+    "Invalid payload values:",
+    invalid_payload
+)
+
+df.loc[
+    df["payload_kg"] < 0,
+    "payload_kg"
+] = None
+
+
+# ----------------------------------------------------------
+# Motor temperature
+# ----------------------------------------------------------
+
+invalid_temperature = (
+    df["motor_temp_c"] < 0
+).sum()
+
+print(
+    "Invalid motor temperature values:",
+    invalid_temperature
+)
+
+df.loc[
+    df["motor_temp_c"] < 0,
+    "motor_temp_c"
+] = None
+
+
+# ----------------------------------------------------------
+# Vibration
+# ----------------------------------------------------------
+
+invalid_vibration = (
+    df["vibration_rms"] < 0
+).sum()
+
+print(
+    "Invalid vibration values:",
+    invalid_vibration
+)
+
+df.loc[
+    df["vibration_rms"] < 0,
+    "vibration_rms"
+] = None
+
+
+# ----------------------------------------------------------
+# Rotor RPM
+# ----------------------------------------------------------
+
+invalid_rpm = (
+    df["rotor_rpm_avg"] < 0
+).sum()
+
+print(
+    "Invalid rotor RPM values:",
+    invalid_rpm
+)
+
+df.loc[
+    df["rotor_rpm_avg"] < 0,
     "rotor_rpm_avg"
-]
-
-for column in numeric_columns:
-    df[column] = pd.to_numeric(df[column], errors="coerce")
+] = None
 
 
-# 6. Standardize GPS signal quality
+# ==========================================================
+# STANDARDIZE GPS SIGNAL QUALITY
+# ==========================================================
 
 df["gps_signal_quality"] = (
     df["gps_signal_quality"]
+    .astype("string")
     .str.strip()
+    .str.lower()
+)
+
+df["gps_signal_quality"] = (
+    df["gps_signal_quality"]
+    .replace(
+        {
+            "": pd.NA,
+            "-": pd.NA,
+            "unknown": pd.NA,
+            "none": pd.NA,
+            "nan": pd.NA
+        }
+    )
     .str.title()
 )
 
 
-# 7. Handle missing error codes
+# ==========================================================
+# CLEAN ERROR CODES
+# ==========================================================
 
-df["error_codes"] = df["error_codes"].fillna("NONE")
+df["error_codes"] = (
+    df["error_codes"]
+    .astype("string")
+    .str.strip()
+    .str.upper()
+)
+
+df["error_codes"] = (
+    df["error_codes"]
+    .replace(
+        {
+            "": pd.NA,
+            "-": pd.NA,
+            "UNKNOWN": pd.NA,
+            "NONE": pd.NA,
+            "NAN": pd.NA
+        }
+    )
+    .fillna("NONE")
+)
 
 
-# 8. Save cleaned dataset
+# ==========================================================
+# RESET INDEX
+# ==========================================================
 
-df.to_csv(output_path, index=False)
+df = df.reset_index(drop=True)
 
 
-# 9. Final information
+# ==========================================================
+# CREATE OUTPUT DIRECTORY
+# ==========================================================
 
-print("\nCleaned dataset shape:", df.shape)
+output_path.parent.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+
+# ==========================================================
+# SAVE CLEANED DATA
+# ==========================================================
+
+df.to_csv(
+    output_path,
+    index=False
+)
+
+
+# ==========================================================
+# FINAL VALIDATION
+# ==========================================================
+
+print(
+    "\nCleaned dataset shape:",
+    df.shape
+)
 
 print("\nMissing values after cleaning:")
 print(df.isnull().sum())
 
 print("\nData types after cleaning:")
 print(df.dtypes)
+
+print("\nCleaned dataset preview:")
+print(
+    df.head().to_string(
+        index=False
+    )
+)
 
 print("\nCleaned file saved to:")
 print(output_path)
