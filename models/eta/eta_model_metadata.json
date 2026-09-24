@@ -1,0 +1,5 @@
+{
+    "selected_model": "Gradient Boosting",
+    "selection_metric": "rmse",
+    "target": "actual_delivery_hours"
+}
