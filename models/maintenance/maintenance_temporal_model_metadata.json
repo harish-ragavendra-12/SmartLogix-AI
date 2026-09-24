@@ -1,0 +1,22 @@
+{
+    "project": "SmartLogix AI",
+    "module": "Predictive Maintenance",
+    "feature_engineering": "Temporal Historical Features",
+    "target_column": "failure_reported",
+    "selected_model": "Random Forest",
+    "metrics": {
+        "accuracy": 0.5268,
+        "precision": 0.5287,
+        "recall": 0.5268,
+        "f1_score": 0.5257,
+        "roc_auc": 0.5168
+    },
+    "training_samples": 818,
+    "testing_samples": 205,
+    "feature_count": 23,
+    "target_distribution": {
+        "no_failure": 524,
+        "failure_reported": 499
+    },
+    "random_state": 42
+}
