@@ -41,6 +41,14 @@ DATABASE_DIR = PROJECT_ROOT / "database"
 LOGS_DIR = PROJECT_ROOT / "logs"
 
 # ==========================================================
+# REPORTS
+# ==========================================================
+
+REPORTS_DIR = PROJECT_ROOT / "reports"
+
+FIGURES_DIR = REPORTS_DIR / "figures"
+
+# ==========================================================
 # RANDOM SEED
 # ==========================================================
 
