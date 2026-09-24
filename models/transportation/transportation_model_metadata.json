@@ -1,0 +1,4 @@
+{
+    "selected_model": "Random Forest",
+    "selection_metric": "weighted_f1"
+}
