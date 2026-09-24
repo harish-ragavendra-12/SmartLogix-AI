@@ -1,0 +1,20 @@
+{
+    "project": "SmartLogix AI",
+    "module": "Predictive Maintenance",
+    "target_column": "failure_reported",
+    "selected_model": "Random Forest",
+    "metrics": {
+        "accuracy": 0.5234,
+        "precision": 0.5234,
+        "recall": 0.5234,
+        "f1_score": 0.5234,
+        "roc_auc": 0.5267
+    },
+    "training_samples": 1281,
+    "testing_samples": 321,
+    "failure_distribution": {
+        "no_failure": 803,
+        "failure_reported": 799
+    },
+    "random_state": 42
+}
